@@ -139,9 +139,15 @@ func TestValidateXrayUserFlow(t *testing.T) {
 		allowed  bool
 	}{
 		{"trojan", "", true},
-		{"trojan", "xtls-rprx-direct", false},
-		{"trojan", "xtls-rprx-vision", false},
+		{"trojan", "none", true},
+		{"trojan", "NONE", true},
+		{"trojan", " none ", true},
+		{"trojan", "xtls-rprx-direct", true},
+		{"trojan", "xtls-rprx-vision", true},
 		{"vless", "", true},
+		{"vless", "none", true},
+		{"vless", "NONE", false},
+		{"vless", " none ", false},
 		{"vless", "xtls-rprx-vision", true},
 		{"vless", "xtls-rprx-direct", false},
 		{"vless", "xtls-rprx-origin", false},
@@ -153,6 +159,14 @@ func TestValidateXrayUserFlow(t *testing.T) {
 		err := validateXrayUserFlow(tc.protocol, tc.flow)
 		if (err == nil) != tc.allowed {
 			t.Errorf("validateXrayUserFlow(%q, %q) = %v, allowed=%v", tc.protocol, tc.flow, err, tc.allowed)
+		}
+	}
+}
+
+func TestNormalizeXrayUserFlow(t *testing.T) {
+	for input, want := range map[string]string{"": "", "none": "", "NONE": "NONE", " none ": " none ", "xtls-rprx-vision": "xtls-rprx-vision", "xtls-rprx-direct": "xtls-rprx-direct"} {
+		if got := normalizeXrayUserFlow(input); got != want {
+			t.Errorf("normalizeXrayUserFlow(%q) = %q, want %q", input, got, want)
 		}
 	}
 }

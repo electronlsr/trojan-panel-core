@@ -270,3 +270,17 @@ func TestStableXrayRejectsRemovedConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestStableXrayRejectsExplicitTrojanFlow(t *testing.T) {
+	binary := stableXrayBinary(t)
+	for _, flow := range []string{"none", "xtls-rprx-vision", "xtls-rprx-direct"} {
+		t.Run(flow, func(t *testing.T) {
+			settings := fmt.Sprintf(`{"clients":[{"password":"isolated-explicit-flow-user","flow":%q}]}`, flow)
+			config := loopbackConfig(t, dto.XrayConfigDto{ApiPort: smokePort(t), Port: smokePort(t), Protocol: "trojan", Tag: "user", Settings: settings, StreamSettings: `{"network":"tcp","security":"none"}`})
+			output, err := exec.Command(binary, "run", "-test", "-config", writeSmokeConfig(t, config)).CombinedOutput()
+			if err == nil || !strings.Contains(string(output), "Flow for Trojan") {
+				t.Fatalf("expected explicit Trojan flow rejection, got %v:\n%s", err, output)
+			}
+		})
+	}
+}

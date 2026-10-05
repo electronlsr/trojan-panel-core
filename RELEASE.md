@@ -4,7 +4,7 @@ The `Publish versioned containers` workflow builds from reviewed `main` source,
 tests the native container against disposable local services, then publishes
 seven Linux architectures to `ghcr.io/electronlsr/trojan-panel-core`.
 
-Release tags are explicit in `.release-version` (installation release `2026.10.05-r1`).
+Release tags are explicit in `.release-version` (Core installation release `3.0.0`).
 The workflow fails closed on registry uncertainty and refuses to replace an existing version tag and also publishes an
 exact `sha-<source-commit>` tag. There is no floating `latest` tag. Consumers
 should pin the multi-platform digest recorded in the `release-image` artifact.
@@ -38,3 +38,26 @@ outputs, not installation releases. Never use them in an installer. Registry
 checks and serialized release jobs prevent ordinary accidental replacement;
 GHCR tags are not an atomic immutable-tag mechanism, so installers must use
 the recorded digest to remain immutable against independent writers.
+
+## 3.0.0 compatibility fix
+
+Core 3.0.0 restores dynamic Trojan user provisioning for legacy node metadata such
+as `xray_flow=xtls-rprx-vision`: the old Xray 1.8.4 dynamic Trojan account also
+contained only the password, so stale panel metadata is not a Trojan protocol
+setting. Stored metadata is preserved; explicit unsupported Trojan flow in
+custom JSON remains rejected. VLESS normalizes only the exact `none` UI sentinel
+and still rejects genuinely unsupported flows.
+
+The release compiles a static regression test artifact and checks its checksum.
+It executes inside both the native build image and the exact pulled candidate
+image before version-tag promotion, with no external network or production
+state. Coverage includes real TLS certificate validation and HTTP forwarding,
+actual AddUser RPCs, reopened SQLite metadata, and an isolated Redis protocol
+fixture. The ordinary whole-service MariaDB/Redis/restart smoke remains in place.
+UI, backend, Core and the installer are coordinated at 3.0.0. Third-party proxy core versions are unchanged.
+
+## Panel version 3.0.0
+
+Panel runtime/version APIs, the UI package and version file, and the image tag
+are now 3.0.0. This release does not rename Xray, Trojan-Go, Hysteria, Caddy or
+other third-party components, and it introduces no database schema migration.

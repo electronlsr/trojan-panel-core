@@ -41,6 +41,9 @@ jobs:
         run: |
           export GO_PANEL=$(which go)
           scripts/build-components.sh all "$PLATFORM"
+          if [[ "$PLATFORM" == linux/amd64 ]]; then
+            CGO_ENABLED=0 go test -c -trimpath -ldflags='-s -w -buildid=' -o build/xray-regression-linux-amd64 ./app/xray
+          fi
           sha256sum build/* > "build/SHA256SUMS-${PLATFORM//\//-}"
       - name: Unit and native compatibility tests
         if: matrix.platform == 'linux/amd64'
@@ -59,7 +62,9 @@ jobs:
         run: docker build --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 --build-arg TARGETVARIANT= -t trojan-panel-core:test .
       - name: Native service container smoke test
         if: matrix.platform == 'linux/amd64'
-        run: bash scripts/container-smoke.sh core trojan-panel-core:test
+        run: |
+          bash scripts/container-smoke.sh core trojan-panel-core:test
+          bash scripts/container-xray-regression.sh trojan-panel-core:test build/xray-regression-linux-amd64
       - name: Name artifact
         id: artifact
         env:

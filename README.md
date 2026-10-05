@@ -49,6 +49,10 @@ create table trojan_panel_db.account
 
 router->api->middleware->app->service/dao->core
 
+## Release 3.0.0
+
+Versioned public images and verification details are in [RELEASE.md](RELEASE.md). Panel component versions are 3.0.0; bundled third-party proxy cores keep their own version numbers.
+
 ## Build
 
 [Pinned core builds and upgrade guide](UPGRADE.md)

@@ -151,7 +151,8 @@ func (x *xrayApi) AddUser(dto dto.XrayAddUserDto) error {
 		return nil
 	}
 
-	if err := validateXrayUserFlow(dto.Protocol, nodeConfig.XrayFlow); err != nil {
+	flow := normalizeXrayUserFlow(nodeConfig.XrayFlow)
+	if err := validateXrayUserFlow(dto.Protocol, flow); err != nil {
 		logrus.Errorf("xray AddUser: %v", err)
 		return err
 	}
@@ -199,7 +200,6 @@ func (x *xrayApi) AddUser(dto dto.XrayAddUserDto) error {
 						Level: 0,
 						Account: serial.ToTypedMessage(&trojan.Account{
 							Password: dto.Password,
-							Flow:     nodeConfig.XrayFlow,
 						}),
 					},
 				}),
@@ -214,7 +214,7 @@ func (x *xrayApi) AddUser(dto dto.XrayAddUserDto) error {
 						Level: 0,
 						Account: serial.ToTypedMessage(&vless.Account{
 							Id:         util.GenerateUUID(dto.Password),
-							Flow:       nodeConfig.XrayFlow,
+							Flow:       flow,
 							Encryption: "none",
 						}),
 					},
@@ -312,16 +312,28 @@ func (x *xrayApi) GetSysStats() (stats *statsService.SysStatsResponse, err error
 	return sysStats, nil
 }
 
-// Latest Xray removed Trojan flow and only accepts Vision for VLESS inbounds.
-// The old protobuf SDK can still serialize legacy values, which would otherwise
-// be silently ignored (Trojan) or create an unusable user (VLESS).
+// The panel's UI and existing databases use the literal "none" for no flow.
+// It is a UI sentinel, not a removed XTLS flow. Normalize only that exact value
+// at the RPC boundary; preserve stored data and reject other unsupported values.
+func normalizeXrayUserFlow(flow string) string {
+	if flow == "none" {
+		return ""
+	}
+	return flow
+}
+
+// Trojan's dynamic account has no flow field in either the previous bundled
+// Xray v1.8.4 or current Xray. The panel UI can leave stale VLESS flow metadata
+// on Trojan nodes; the previous runtime ignored that unknown SDK wire field.
+// Do not turn previously inert metadata into an authentication failure. Explicit
+// JSON flow/XTLS options still pass through the runtime's strict preflight.
+// VLESS does use flow, so unsupported server values must still be rejected.
 func validateXrayUserFlow(protocol, flow string) error {
+	flow = normalizeXrayUserFlow(flow)
 	if flow == "" {
 		return nil
 	}
 	switch protocol {
-	case constant.ProtocolTrojan:
-		return fmt.Errorf("xray: Trojan flow %q is no longer supported; update the node configuration explicitly", flow)
 	case constant.ProtocolVless:
 		if flow != "xtls-rprx-vision" {
 			return fmt.Errorf("xray: VLESS inbound flow %q is not supported; use an empty flow or xtls-rprx-vision", flow)

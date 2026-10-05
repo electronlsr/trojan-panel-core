@@ -11,6 +11,8 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [[ $# == 2 ]] || fail 'usage: container-smoke.sh core|backend|ui IMAGE'
 mode=$1
 image=$2
+expected_version=${EXPECTED_PANEL_VERSION:-v$(cat "$(dirname "${BASH_SOURCE[0]}")/../.release-version")}
+[[ "$expected_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][a-z0-9]+)*$ ]] || fail 'invalid expected Panel version'
 case "$mode" in core|backend|ui) ;; *) fail "unknown mode: $mode" ;; esac
 [[ -n "$image" && "$image" != -* ]] || fail 'invalid image argument'
 [[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_OS:-} == Linux && ${RUNNER_ENVIRONMENT:-} == github-hosted ]] || fail 'run only in a disposable GitHub-hosted Linux Actions runner'
@@ -209,9 +211,9 @@ docker start "$app" >/dev/null
 case "$mode" in
   backend)
     wait_for 'backend settings API (SQL + Redis)' "$app" 120 \
-      json_response '.code == 20000 and .type == "success" and .data.systemName == "Trojan Panel"' \
+      json_response ".code == 20000 and .type == \"success\" and .data.systemName == \"Trojan Panel\" and .data.version == \"$expected_version\"" \
       http_get /api/auth/setting
-    check_binary "${BACKEND_VERSION:-v2.3.1}" "$root/trojan-panel" -version
+    check_binary "$expected_version" "$root/trojan-panel" -version
     check_files 'test -s config/config.ini; test -s config/rbac_model.conf;
       test -s config/template/template-clash-rule.yaml; test -s config/template/template-xray.json;
       test -s config/export/AccountTemplate.json; test -s config/export/NodeServerTemplate.json;
@@ -231,6 +233,7 @@ case "$mode" in
       printf '%s' "$value"
     }
     panel_version=$(manifest_value PANEL_VERSION)
+    [[ "v$panel_version" == "$expected_version" ]] || fail 'Core inventory does not match the release version'
     xray_version=$(manifest_value XRAY_VERSION)
     trojan_version=$(manifest_value TROJAN_GO_VERSION)
     hy1_version=$(manifest_value HYSTERIA1_VERSION)
@@ -276,6 +279,7 @@ PY
     wait_for 'UI HTTP' "$app" 60 http_get /
     http_get / >"$work/index.html"
     check_files 'test -s index.html; test -s version; test -d static'
+    [[ $(docker exec "$app" cat version) == "$expected_version" ]] || fail 'UI version file does not match the release version'
     timeout 10 docker exec "$app" nginx -t
     docker cp "$app:$root/index.html" "$work/image-index.html"
     cmp "$work/index.html" "$work/image-index.html" || fail 'Nginx is not serving the packaged index.html'
