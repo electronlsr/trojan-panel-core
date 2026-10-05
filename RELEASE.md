@@ -4,8 +4,8 @@ The `Publish versioned containers` workflow builds from reviewed `main` source,
 tests the native container against disposable local services, then publishes
 seven Linux architectures to `ghcr.io/electronlsr/trojan-panel-core`.
 
-Release tags are explicit in `.release-version` (initial release `2026.10.05`).
-The workflow refuses to replace an existing version tag and also publishes an
+Release tags are explicit in `.release-version` (installation release `2026.10.05-r1`).
+The workflow fails closed on registry uncertainty and refuses to replace an existing version tag and also publishes an
 exact `sha-<source-commit>` tag. There is no floating `latest` tag. Consumers
 should pin the multi-platform digest recorded in the `release-image` artifact.
 The runtime base image is pinned by digest; toolchains and dependency lockfiles
@@ -17,7 +17,7 @@ known vulnerabilities or that all architectures received native execution tests.
 Publishing uses only GitHub's per-job `GITHUB_TOKEN` with `packages: write` in
 the final publish job. No long-lived token, production secret, or deployment
 credential is stored. PRs cannot enter the publish workflow. The workflow runs
-on an explicit release-version/build recipe change on `main` or a manual run
+on an explicit release-version change on `main` or a manual run
 of `main`; tests and cross-compilation must finish first. Repository writers
 must bump `.release-version` for each new release.
 
@@ -29,3 +29,12 @@ alone is not proof of public availability. No server is deployed by this repo.
 Runtime paths, environment names, ports, and installer bind-mount conventions
 remain unchanged. Native service smoke tests use a new disposable Docker
 network, randomized database credentials, and disposable containers only.
+
+Artifacts are verified against per-build SHA-256 checksum manifests after
+download. A unique `candidate-<run>-<attempt>` tag is pushed first; only after
+pulling that exact digest and passing the native service smoke is the same
+index promoted to the version and source-SHA tags. Candidate tags are CI
+outputs, not installation releases. Never use them in an installer. Registry
+checks and serialized release jobs prevent ordinary accidental replacement;
+GHCR tags are not an atomic immutable-tag mechanism, so installers must use
+the recorded digest to remain immutable against independent writers.

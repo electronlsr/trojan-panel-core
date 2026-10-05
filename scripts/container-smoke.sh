@@ -13,7 +13,7 @@ mode=$1
 image=$2
 case "$mode" in core|backend|ui) ;; *) fail "unknown mode: $mode" ;; esac
 [[ -n "$image" && "$image" != -* ]] || fail 'invalid image argument'
-[[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_OS:-} == Linux ]] || fail 'run only in a disposable Linux GitHub Actions runner'
+[[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_OS:-} == Linux && ${RUNNER_ENVIRONMENT:-} == github-hosted ]] || fail 'run only in a disposable GitHub-hosted Linux Actions runner'
 [[ $(uname -m) == x86_64 ]] || fail 'this smoke must run natively on amd64'
 for tool in docker jq timeout python3; do command -v "$tool" >/dev/null || fail "missing command: $tool"; done
 # Do not follow a remote Docker context/DOCKER_HOST to a user or production server.
@@ -260,6 +260,15 @@ PY
       http_post /api/auth/hysteria2 "{\"auth\":\"$auth_password\"}" || fail 'Hysteria 2 positive SQL auth failed'
     json_response '.ok == false and .id == ""' \
       http_post /api/auth/hysteria2 '{"auth":"deliberately-invalid-ci-password"}' || fail 'Hysteria 2 negative auth failed'
+    # The application's Redis pool is lazy without active nodes. Verify container
+    # DNS, TCP and authenticated Redis reachability separately; this does not
+    # claim to exercise synchronization, distributed locks or quota updates.
+    timeout 5 docker exec -e "SMOKE_REDIS_PASSWORD=$redis_password" "$app" bash -ec '
+      exec 3<>/dev/tcp/redis/6379
+      printf "AUTH %s\r\nPING\r\n" "$SMOKE_REDIS_PASSWORD" >&3
+      IFS= read -r reply <&3; test "$reply" = "$(printf "+OK\r")"
+      IFS= read -r reply <&3; test "$reply" = "$(printf "+PONG\r")"
+    ' || fail 'Redis is not reachable/authenticated from core container'
     # Verify the gRPC listener without claiming a complete RPC/proxy lifecycle test.
     timeout 5 docker exec "$app" bash -c 'exec 3<>/dev/tcp/127.0.0.1/8100' || fail 'core gRPC listener unavailable'
     ;;

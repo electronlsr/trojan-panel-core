@@ -2,6 +2,7 @@ name: Build and compatibility tests
 on:
   pull_request:
   push:
+    paths-ignore: ['.release-version', '.github/workflows/release.yml', 'RELEASE.md']
   workflow_dispatch:
   workflow_call:
 permissions:
@@ -9,6 +10,7 @@ permissions:
 jobs:
   binaries:
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -39,7 +41,7 @@ jobs:
         run: |
           export GO_PANEL=$(which go)
           scripts/build-components.sh all "$PLATFORM"
-          sha256sum build/* > build/SHA256SUMS
+          sha256sum build/* > "build/SHA256SUMS-${PLATFORM//\//-}"
       - name: Unit and native compatibility tests
         if: matrix.platform == 'linux/amd64'
         env:

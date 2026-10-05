@@ -2,7 +2,7 @@ name: Publish versioned containers
 on:
   push:
     branches: [main]
-    paths: ['.release-version', '.github/workflows/release.yml', 'Dockerfile', 'scripts/container-smoke.sh']
+    paths: ['.release-version']
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,6 +16,7 @@ jobs:
     if: github.repository_owner == 'electronlsr' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     permissions:
       contents: read
       packages: write
@@ -28,6 +29,9 @@ jobs:
           pattern: core-binaries-*
           merge-multiple: true
           path: build/
+      - name: Verify the tested artifacts
+        run: |
+          for sums in build/SHA256SUMS-linux-*; do sha256sum --check "$sums"; done
       - name: Read explicit release version
         id: release
         run: |
@@ -43,16 +47,14 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Refuse to overwrite a published release
+      - name: Confirm final tags are absent
         env:
           IMAGE: ${{ steps.release.outputs.image }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
-          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
-            echo "Release $IMAGE:$VERSION already exists. Bump .release-version; published releases must never be overwritten." >&2
-            exit 1
-          fi
-      - name: Publish tested, versioned multi-platform image
+          bash scripts/assert-release-absent.sh "$IMAGE:$VERSION"
+          bash scripts/assert-release-absent.sh "$IMAGE:sha-$GITHUB_SHA"
+      - name: Publish unpromoted multi-platform candidate
         id: push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         env:
@@ -63,9 +65,7 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
-          tags: |
-            ${{ steps.release.outputs.image }}:${{ steps.release.outputs.version }}
-            ${{ steps.release.outputs.image }}:sha-${{ github.sha }}
+          tags: ${{ steps.release.outputs.image }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -78,6 +78,19 @@ jobs:
         run: |
           docker pull --platform linux/amd64 "$IMAGE@$DIGEST"
           bash scripts/container-smoke.sh core "$IMAGE@$DIGEST"
+      - name: Promote only the verified digest to final tags
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          VERSION: ${{ steps.release.outputs.version }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          bash scripts/assert-release-absent.sh "$IMAGE:$VERSION"
+          bash scripts/assert-release-absent.sh "$IMAGE:sha-$GITHUB_SHA"
+          docker buildx imagetools create --tag "$IMAGE:$VERSION" --tag "$IMAGE:sha-$GITHUB_SHA" "$IMAGE@$DIGEST"
+          for ref in "$IMAGE:$VERSION" "$IMAGE:sha-$GITHUB_SHA"; do
+            actual=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | jq -r .digest)
+            [[ "$actual" == "$DIGEST" ]]
+          done
       - name: Record exact published identity
         env:
           IMAGE: ${{ steps.release.outputs.image }}
