@@ -1,3 +1,6 @@
+//go:build integration
+// +build integration
+
 package hysteria2
 
 import (

@@ -51,7 +51,9 @@ router->api->middleware->app->service/dao->core
 
 ## Build
 
-[compile.bat](compile.bat)
+[Pinned core builds and upgrade guide](UPGRADE.md)
+
+Build all actual proxy executables with `scripts/build-components.sh`; the main `go.mod` only pins control SDKs.
 
 ## Other
 

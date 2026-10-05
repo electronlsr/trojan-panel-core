@@ -2,6 +2,7 @@ package naiveproxy
 
 import (
 	"errors"
+	"fmt"
 	"github.com/sirupsen/logrus"
 	"os"
 	"strconv"
@@ -18,13 +19,26 @@ func InitNaiveProxyApp() error {
 	if err != nil {
 		return err
 	}
-	naiveProxyInstance := process.NewNaiveProxyInstance()
+	return startNaiveProxyConfigs(apiPorts, process.NewNaiveProxyInstance().StartNaiveProxy)
+}
+
+func startNaiveProxyConfigs(apiPorts []uint, start func(uint) error) error {
+	var failures []error
 	for _, apiPort := range apiPorts {
-		if err = naiveProxyInstance.StartNaiveProxy(apiPort); err != nil {
-			return err
+		configPath, err := util.GetConfigFilePath(constant.NaiveProxy, apiPort)
+		if err == nil {
+			err = migrateNaiveProxyConfig(configPath)
+		}
+		if err == nil {
+			err = start(apiPort)
+		}
+		if err != nil {
+			failure := fmt.Errorf("NaiveProxy node %d: %w", apiPort, err)
+			logrus.Error(failure)
+			failures = append(failures, failure)
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func StartNaiveProxy(naiveProxyConfigDto dto.NaiveProxyConfigDto) error {

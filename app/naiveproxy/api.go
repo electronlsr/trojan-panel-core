@@ -26,7 +26,7 @@ func NewNaiveProxyApi(apiPort uint) *naiveProxyApi {
 }
 
 // ListUsers query all users on a node
-func (n *naiveProxyApi) ListUsers() (*[]bo.HandleAuth, error) {
+func (n *naiveProxyApi) listHandlers() ([]authHandler, error) {
 	url := fmt.Sprintf("http://127.0.0.1:%d/config/apps/http/servers/srv0/routes/0/handle/0/routes/0/handle/", n.apiPort)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -50,7 +50,7 @@ func (n *naiveProxyApi) ListUsers() (*[]bo.HandleAuth, error) {
 		logrus.Errorf("NaiveProxy ListUsers IO err: %v", err)
 		return nil, errors.New(constant.SysError)
 	}
-	var handleAuths *[]bo.HandleAuth
+	var handleAuths []authHandler
 	if err = json.Unmarshal(contentByte, &handleAuths); err != nil {
 		logrus.Errorf("NaiveProxy ListUsers Unmarshal err: %v", err)
 		return nil, errors.New(constant.SysError)
@@ -58,15 +58,37 @@ func (n *naiveProxyApi) ListUsers() (*[]bo.HandleAuth, error) {
 	return handleAuths, nil
 }
 
-// GetUser query users on a node
+// ListUsers keeps the panel-facing identity fields stable while reading either
+// the legacy or current forwardproxy configuration format.
+func (n *naiveProxyApi) ListUsers() (*[]bo.HandleAuth, error) {
+	handlers, err := n.listHandlers()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := decodeUsers(handlers)
+	if err != nil {
+		return nil, err
+	}
+	users := make([]bo.HandleAuth, 0, len(entries))
+	for _, entry := range entries {
+		users = append(users, entry.user)
+	}
+	return &users, nil
+}
+
+// GetUser returns the actual Caddy handler index, including multi-user handlers.
 func (n *naiveProxyApi) GetUser(pass string) (*bo.HandleAuth, *int, error) {
-	users, err := n.ListUsers()
+	handlers, err := n.listHandlers()
 	if err != nil {
 		return nil, nil, err
 	}
-	for index, user := range *users {
-		if user.AuthPassDeprecated == pass {
-			return &user, &index, nil
+	entries, err := decodeUsers(handlers)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, entry := range entries {
+		if entry.user.AuthPassDeprecated == pass {
+			return &entry.user, &entry.handlerIndex, nil
 		}
 	}
 	return nil, nil, nil
@@ -95,7 +117,7 @@ func (n *naiveProxyApi) AddUser(dto dto.NaiveProxyAddUserDto) error {
 	}
 	handleAuth.AuthUserDeprecated = dto.Username
 	handleAuth.AuthPassDeprecated = dto.Pass
-	addUserDtoByte, err := json.Marshal(handleAuth)
+	addUserDtoByte, err := marshalAuthHandler(*handleAuth)
 	if err != nil {
 		logrus.Errorf("NaiveProxy AddUser Marshal err: %v", err)
 		return errors.New(constant.SysError)
@@ -124,27 +146,47 @@ func (n *naiveProxyApi) AddUser(dto dto.NaiveProxyAddUserDto) error {
 	return nil
 }
 
-// DeleteUser delete user on node
+// DeleteUser removes only the requested account. When a manually configured
+// handler contains several credentials, retain the other accounts and options.
 func (n *naiveProxyApi) DeleteUser(pass string) error {
-	_, index, err := n.GetUser(pass)
+	handlers, err := n.listHandlers()
 	if err != nil {
 		return err
 	}
-	if index != nil {
+	entries, err := decodeUsers(handlers)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.user.AuthPassDeprecated != pass {
+			continue
+		}
+		method := http.MethodDelete
+		url := fmt.Sprintf("http://127.0.0.1:%d/config/apps/http/servers/srv0/routes/0/handle/0/routes/0/handle/%d", n.apiPort, entry.handlerIndex)
+		var body []byte
+		if entry.credentialCount > 1 {
+			method = http.MethodPatch
+			url += "/auth_credentials"
+			credentials := handlers[entry.handlerIndex].AuthCredentials
+			credentials = append(credentials[:entry.credentialIndex], credentials[entry.credentialIndex+1:]...)
+			body, err = json.Marshal(credentials)
+			if err != nil {
+				return err
+			}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		url := fmt.Sprintf("http://127.0.0.1:%d/config/apps/http/servers/srv0/routes/0/handle/0/routes/0/handle/%d", n.apiPort, *index)
-		req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+		req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 		if err != nil {
-			logrus.Errorf("NaiveProxy DeleteUser NewRequest err: %v", err)
 			return errors.New(constant.SysError)
 		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
 		resp, err := http.DefaultClient.Do(req)
-		defer func() {
-			if resp != nil {
-				resp.Body.Close()
-			}
-		}()
+		if resp != nil {
+			defer resp.Body.Close()
+		}
 		if err != nil || resp.StatusCode != http.StatusOK {
 			logrus.Errorf("NaiveProxy DeleteUser resp err: %v", err)
 			return errors.New(constant.SysError)

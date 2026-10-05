@@ -19,13 +19,18 @@ func InitXrayApp() error {
 	if err != nil {
 		return err
 	}
-	xrayProcess := process.NewXrayProcess()
+	return startXrayInstances(apiPorts, process.NewXrayProcess().StartXray)
+}
+
+// One rejected legacy config must not keep independent valid nodes offline.
+func startXrayInstances(apiPorts []uint, start func(uint) error) error {
+	var failures []error
 	for _, apiPort := range apiPorts {
-		if err = xrayProcess.StartXray(apiPort); err != nil {
-			return err
+		if err := start(apiPort); err != nil {
+			failures = append(failures, fmt.Errorf("xray node API port %d: %w", apiPort, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func StartXray(xrayConfigDto dto.XrayConfigDto) error {
@@ -60,19 +65,27 @@ func RestartXray(apiPort uint) error {
 }
 
 func initXray(xrayConfigDto dto.XrayConfigDto) error {
-	// initialization configuration file name format: config-[apiPort]-[protocol].json
-	xrayConfigFilePath := fmt.Sprintf("%s/config-%d-%s.json", constant.XrayPath, xrayConfigDto.ApiPort, xrayConfigDto.Protocol)
-	file, err := os.OpenFile(xrayConfigFilePath, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0666)
+	certConfig := core.Config.CertConfig
+	configContentByte, err := buildXrayConfig(xrayConfigDto, bo.Certificate{
+		CertificateFile: certConfig.CrtPath,
+		KeyFile:         certConfig.KeyPath,
+	})
 	if err != nil {
-		logrus.Errorf("create xray file %s err: %v", xrayConfigFilePath, err)
 		return err
 	}
-	defer func() {
-		if file != nil {
-			file.Close()
-		}
-	}()
+	// Do not truncate an existing config until the replacement has been built.
+	xrayConfigFilePath := fmt.Sprintf("%s/config-%d-%s.json", constant.XrayPath, xrayConfigDto.ApiPort, xrayConfigDto.Protocol)
+	if err := os.WriteFile(xrayConfigFilePath, configContentByte, 0666); err != nil {
+		logrus.Errorf("xray file config.json write err: %v", err)
+		return err
+	}
+	return nil
+}
 
+// buildXrayConfig keeps the template and stream settings opaque. Xray adds new
+// settings independently of the panel; decoding them into a partial DTO silently
+// discards options such as xhttpSettings, grpcSettings, sockopt and TLS options.
+func buildXrayConfig(xrayConfigDto dto.XrayConfigDto, certificate bo.Certificate) ([]byte, error) {
 	// generate corresponding configuration files according to different protocols, and account information is created through a new synchronous coroutine
 	if xrayConfigDto.Template == "" {
 		xrayConfigDto.Template = `{
@@ -119,47 +132,26 @@ func initXray(xrayConfigDto dto.XrayConfigDto) error {
     }
 }`
 	}
-	xrayConfig := &bo.XrayConfigBo{}
-	// map json strings to template objects
-	if err = json.Unmarshal([]byte(xrayConfigDto.Template), xrayConfig); err != nil {
-		logrus.Errorf("xray template config deserialization err: %v", err)
-		return err
+	xrayConfig := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(xrayConfigDto.Template), &xrayConfig); err != nil {
+		return nil, fmt.Errorf("xray template config deserialization: %w", err)
 	}
-
-	// set the streamSettings field
-	streamSettingsStr := []byte("{}")
-	if xrayConfigDto.StreamSettings != "" {
-		streamSettings := &bo.StreamSettings{}
-		if err = json.Unmarshal([]byte(xrayConfigDto.StreamSettings), streamSettings); err != nil {
-			logrus.Errorf("xray StreamSettings deserialization err: %v", err)
-			return err
+	if xrayConfig == nil {
+		return nil, errors.New("xray template config must be an object")
+	}
+	var inbounds []json.RawMessage
+	if raw, ok := xrayConfig["inbounds"]; ok {
+		if err := json.Unmarshal(raw, &inbounds); err != nil {
+			return nil, fmt.Errorf("xray template inbounds deserialization: %w", err)
 		}
-
-		if streamSettings.Security != "none" {
-			// set cert
-			certConfig := core.Config.CertConfig
-			var certificates []bo.Certificate
-			certificate := bo.Certificate{
-				CertificateFile: certConfig.CrtPath,
-				KeyFile:         certConfig.KeyPath,
-			}
-			certificates = append(certificates, certificate)
-			if streamSettings.Security == "tls" && len(streamSettings.TlsSettings.Certificates) == 0 {
-				streamSettings.TlsSettings.Certificates = certificates
-			} else if streamSettings.Security == "reality" {
-
-			}
-		}
-
-		streamSettingsStr, err = json.MarshalIndent(streamSettings, "", "    ")
-		if err != nil {
-			logrus.Errorf("xray StreamSettings serialization err: %v", err)
-			return err
-		}
+	}
+	streamSettingsStr, err := buildStreamSettings(xrayConfigDto.StreamSettings, certificate)
+	if err != nil {
+		return nil, err
 	}
 
 	// add inbound protocol
-	xrayConfig.Inbounds = append(xrayConfig.Inbounds, bo.InboundBo{
+	apiInbound, err := json.Marshal(bo.InboundBo{
 		Listen:   "127.0.0.1",
 		Port:     xrayConfigDto.ApiPort,
 		Protocol: "dokodemo-door",
@@ -167,7 +159,10 @@ func initXray(xrayConfigDto dto.XrayConfigDto) error {
 		Tag:      "api",
 	})
 
-	xrayConfig.Inbounds = append(xrayConfig.Inbounds, bo.InboundBo{
+	if err != nil {
+		return nil, err
+	}
+	userInbound, err := json.Marshal(bo.InboundBo{
 		Listen:         "0.0.0.0",
 		Port:           xrayConfigDto.Port,
 		Protocol:       xrayConfigDto.Protocol,
@@ -177,17 +172,64 @@ func initXray(xrayConfigDto dto.XrayConfigDto) error {
 		Sniffing:       bo.TypeMessage(xrayConfigDto.Sniffing),
 		Allocate:       bo.TypeMessage(xrayConfigDto.Allocate),
 	})
-	configContentByte, err := json.MarshalIndent(xrayConfig, "", "    ")
 	if err != nil {
-		logrus.Errorf("xray template config deserialization err: %v", err)
-		return err
+		return nil, err
 	}
-	_, err = file.Write(configContentByte)
+	inbounds = append(inbounds, apiInbound, userInbound)
+	xrayConfig["inbounds"], err = json.Marshal(inbounds)
 	if err != nil {
-		logrus.Errorf("xray file config.json write err: %v", err)
-		return err
+		return nil, err
 	}
-	return nil
+	return json.MarshalIndent(xrayConfig, "", "    ")
+}
+
+func buildStreamSettings(raw string, certificate bo.Certificate) ([]byte, error) {
+	if raw == "" {
+		return []byte("{}"), nil
+	}
+	settings := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
+		return nil, fmt.Errorf("xray streamSettings deserialization: %w", err)
+	}
+	if settings == nil {
+		return nil, errors.New("xray streamSettings must be an object")
+	}
+	var security string
+	if value, ok := settings["security"]; ok {
+		if err := json.Unmarshal(value, &security); err != nil {
+			return nil, fmt.Errorf("xray streamSettings security: %w", err)
+		}
+	}
+	if security == "tls" {
+		tls := map[string]json.RawMessage{}
+		if value, ok := settings["tlsSettings"]; ok {
+			if err := json.Unmarshal(value, &tls); err != nil {
+				return nil, fmt.Errorf("xray tlsSettings deserialization: %w", err)
+			}
+		}
+		if tls == nil {
+			tls = map[string]json.RawMessage{}
+		}
+		var certificates []json.RawMessage
+		if value, ok := tls["certificates"]; ok {
+			if err := json.Unmarshal(value, &certificates); err != nil {
+				return nil, fmt.Errorf("xray TLS certificates deserialization: %w", err)
+			}
+		}
+		if len(certificates) == 0 {
+			value, err := json.Marshal([]bo.Certificate{certificate})
+			if err != nil {
+				return nil, err
+			}
+			tls["certificates"] = value
+		}
+		value, err := json.Marshal(tls)
+		if err != nil {
+			return nil, err
+		}
+		settings["tlsSettings"] = value
+	}
+	return json.Marshal(settings)
 }
 
 func InitXrayBinFile() error {

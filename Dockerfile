@@ -19,6 +19,7 @@ ENV mariadb_ip=127.0.0.1 \
 ARG TARGETOS
 ARG TARGETARCH
 ARG TARGETVARIANT
+COPY build/core-versions.env /tpdata/trojan-panel-core/core-versions.env
 COPY build/trojan-panel-core-${TARGETOS}-${TARGETARCH}${TARGETVARIANT} trojan-panel-core
 COPY build/xray-${TARGETOS}-${TARGETARCH}${TARGETVARIANT} bin/xray/xray
 COPY build/trojan-go-${TARGETOS}-${TARGETARCH}${TARGETVARIANT} bin/trojango/trojan-go

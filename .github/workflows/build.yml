@@ -1,0 +1,63 @@
+name: Build and compatibility tests
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/386, linux/amd64, linux/arm/v6, linux/arm/v7, linux/arm64, linux/ppc64le, linux/s390x]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.17.13'
+          cache: false
+      - name: Remember Trojan-Go compiler
+        run: echo "GO_TROJAN=$(which go)" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.8'
+          cache: false
+      - name: Remember modern compiler
+        run: echo "GO_MODERN=$(which go)" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.20.14'
+          cache: true
+      - name: Build all pinned components
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          export GO_PANEL=$(which go)
+          scripts/build-components.sh all "$PLATFORM"
+          sha256sum build/* > build/SHA256SUMS
+      - name: Unit and native compatibility tests
+        if: matrix.platform == 'linux/amd64'
+        env:
+          XRAY_TEST_BINARY: ${{ github.workspace }}/build/xray-linux-amd64
+          NAIVE_TEST_BINARY: ${{ github.workspace }}/build/naiveproxy-linux-amd64
+          TROJAN_GO_TEST_BINARY: ${{ github.workspace }}/build/trojan-go-linux-amd64
+          HYSTERIA_TEST_BINARY: ${{ github.workspace }}/build/hysteria-linux-amd64
+          HYSTERIA2_TEST_BINARY: ${{ github.workspace }}/build/hysteria2-linux-amd64
+        run: |
+          go test ./... -count=1
+          go vet ./...
+          scripts/smoke-binaries.sh
+      - name: Check container packaging
+        if: matrix.platform == 'linux/amd64'
+        run: docker build --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 --build-arg TARGETVARIANT= -t trojan-panel-core:test .
+      - name: Name artifact
+        id: artifact
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: echo "name=${PLATFORM//\//-}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-binaries-${{ steps.artifact.outputs.name }}
+          path: build/

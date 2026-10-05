@@ -33,7 +33,9 @@ var (
 	version        bool
 )
 
-func init() {
+// InitRuntimeConfig parses the production CLI and prepares persistent paths.
+// Tests import core without touching deployment files or consuming test flags.
+func InitRuntimeConfig() {
 	flag.StringVar(&host, "host", "localhost", "database address")
 	flag.StringVar(&user, "user", "root", "database username")
 	flag.StringVar(&password, "password", "123456", "database password")

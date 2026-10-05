@@ -151,6 +151,11 @@ func (x *xrayApi) AddUser(dto dto.XrayAddUserDto) error {
 		return nil
 	}
 
+	if err := validateXrayUserFlow(dto.Protocol, nodeConfig.XrayFlow); err != nil {
+		logrus.Errorf("xray AddUser: %v", err)
+		return err
+	}
+
 	handlerServiceClient := command.NewHandlerServiceClient(conn)
 	switch dto.Protocol {
 	case constant.ProtocolShadowsocks:
@@ -305,4 +310,22 @@ func (x *xrayApi) GetSysStats() (stats *statsService.SysStatsResponse, err error
 		return nil, errors.New(constant.GrpcError)
 	}
 	return sysStats, nil
+}
+
+// Latest Xray removed Trojan flow and only accepts Vision for VLESS inbounds.
+// The old protobuf SDK can still serialize legacy values, which would otherwise
+// be silently ignored (Trojan) or create an unusable user (VLESS).
+func validateXrayUserFlow(protocol, flow string) error {
+	if flow == "" {
+		return nil
+	}
+	switch protocol {
+	case constant.ProtocolTrojan:
+		return fmt.Errorf("xray: Trojan flow %q is no longer supported; update the node configuration explicitly", flow)
+	case constant.ProtocolVless:
+		if flow != "xtls-rprx-vision" {
+			return fmt.Errorf("xray: VLESS inbound flow %q is not supported; use an empty flow or xtls-rprx-vision", flow)
+		}
+	}
+	return nil
 }

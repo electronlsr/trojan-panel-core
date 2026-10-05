@@ -50,7 +50,9 @@ router->api->middleware->app->service/dao->core
 
 ## 构建
 
-[compile.bat](compile.bat)
+[固定版本构建与升级说明](UPGRADE.md)
+
+使用 `scripts/build-components.sh` 构建实际代理核心。主项目的 `go.mod` 仅固定控制接口 SDK 的版本。
 
 ## 其他
 

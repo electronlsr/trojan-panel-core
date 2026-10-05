@@ -13,6 +13,7 @@ import (
 )
 
 func main() {
+	initialize()
 	serverConfig := core.Config.ServerConfig
 	r := gin.Default()
 	router.Router(r)
@@ -20,7 +21,8 @@ func main() {
 	defer closeResource()
 }
 
-func init() {
+func initialize() {
+	core.InitRuntimeConfig()
 	core.InitConfig()
 	middleware.InitLog()
 	dao.InitMySQL()

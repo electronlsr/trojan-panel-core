@@ -3,8 +3,10 @@ package process
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/sirupsen/logrus"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 	"trojan-panel-core/model/constant"
@@ -49,7 +51,12 @@ func (x *XrayProcess) StartXray(apiPort uint) error {
 		if err != nil {
 			return err
 		}
-		cmd := exec.Command(binaryFilePath, "-c", configFilePath)
+		// Validate with the bundled version before spawning. Removed legacy
+		// options must fail visibly without deleting the saved configuration.
+		if err := validateXrayConfig(binaryFilePath, configFilePath); err != nil {
+			return err
+		}
+		cmd := exec.Command(binaryFilePath, "run", "-config", configFilePath)
 		if cmd.Err != nil {
 			if err = util.RemoveFile(configFilePath); err != nil {
 				return err
@@ -108,4 +115,19 @@ func (x *XrayProcess) releaseProcess(apiPort uint, configFilePath string) {
 func GetXrayState(apiPort uint) bool {
 	_, ok := NewXrayProcess().GetCmdMap().Load(apiPort)
 	return ok
+}
+
+// validateXrayConfig reports the real core diagnostic instead of treating a
+// short-lived process as healthy. It never rewrites or removes the config.
+func validateXrayConfig(binaryFilePath, configFilePath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, binaryFilePath, "run", "-test", "-config", configFilePath).CombinedOutput()
+	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("xray configuration validation timed out: %w", ctx.Err())
+		}
+		return fmt.Errorf("xray configuration rejected by the bundled core: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
