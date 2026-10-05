@@ -3,30 +3,33 @@ on:
   pull_request:
   push:
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
   binaries:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         platform: [linux/386, linux/amd64, linux/arm/v6, linux/arm/v7, linux/arm64, linux/ppc64le, linux/s390x]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version: '1.17.13'
           cache: false
       - name: Remember Trojan-Go compiler
         run: echo "GO_TROJAN=$(which go)" >> "$GITHUB_ENV"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version: '1.26.8'
           cache: false
       - name: Remember modern compiler
         run: echo "GO_MODERN=$(which go)" >> "$GITHUB_ENV"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version: '1.20.14'
           cache: true
@@ -52,12 +55,15 @@ jobs:
       - name: Check container packaging
         if: matrix.platform == 'linux/amd64'
         run: docker build --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 --build-arg TARGETVARIANT= -t trojan-panel-core:test .
+      - name: Native service container smoke test
+        if: matrix.platform == 'linux/amd64'
+        run: bash scripts/container-smoke.sh core trojan-panel-core:test
       - name: Name artifact
         id: artifact
         env:
           PLATFORM: ${{ matrix.platform }}
         run: echo "name=${PLATFORM//\//-}" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: core-binaries-${{ steps.artifact.outputs.name }}
           path: build/

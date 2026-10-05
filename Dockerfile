@@ -1,4 +1,4 @@
-FROM alpine:3.15
+FROM alpine:3.15@sha256:19b4bcc4f60e99dd5ebdca0cbce22c503bbcff197549d7e19dab4f22254dc864
 LABEL maintainer="jonsosnyan <https://jonssonyan.com>"
 WORKDIR /tpdata/trojan-panel-core/
 ENV mariadb_ip=127.0.0.1 \
